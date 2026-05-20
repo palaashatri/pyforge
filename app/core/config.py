@@ -68,6 +68,11 @@ class Config:
     def theme(self) -> str:
         return self._data.get("theme", "dark")
 
+    @property
+    def custom_font(self) -> str:
+        """Font family name for the UI (empty string = use OS system font)."""
+        return self._data.get("custom_font", "")
+
     def update(self, **kwargs) -> None:
         self._data.update(kwargs)
         self.save()
@@ -79,6 +84,7 @@ class Config:
             "image_format": self.image_format,
             "outputs_dir":  str(self.outputs_dir),
             "theme":        self.theme,
+            "custom_font":  self.custom_font,
         }
 
 

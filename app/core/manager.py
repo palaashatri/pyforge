@@ -283,40 +283,34 @@ def _hf_version() -> str:
         return "unknown"
 
 
-# bytes per parameter for common safetensors dtypes
-_DTYPE_BYTES: dict[str, float] = {
-    "F64":  8, "I64": 8,
-    "F32":  4, "I32": 4,
-    "F16":  2, "BF16": 2, "I16": 2,
-    "I8":   1, "U8":  1, "F8_E4M3": 1, "F8_E5M2": 1,
-    "I4":   0.5, "U4": 0.5,
-}
+_MODEL_EXTS = ('.safetensors', '.bin', '.ckpt', '.pt', '.pth')
 
 
-def _safetensors_size_str(m) -> str:
-    """Estimate download size from the model's safetensors metadata.
+def fetch_model_size(repo_id: str, token: Optional[str] = None) -> str:
+    """Return a human-readable download size string for *repo_id* (e.g. '~7.1 GB').
 
-    HuggingFace model objects returned by list_models() may carry a
-    ``safetensors`` attribute with a ``parameters`` dict that maps dtype
-    names to parameter counts.  We multiply counts by bytes-per-param to
-    get an approximate download size — no extra API calls required.
-    Returns an empty string when the metadata is unavailable.
+    Uses ``files_metadata=True`` on ``model_info()`` to get real byte counts —
+    the only reliable approach because ``list_models()`` siblings have ``size=None``
+    without this flag.  Filters to model weight extensions and ignores
+    msgpack/h5/flax files so SDXL doesn't read as 76 GB.
+
+    Returns an empty string on any failure (network, auth, etc.).
     """
     try:
-        st = getattr(m, "safetensors", None)
-        if st is None:
-            return ""
-        params: dict = getattr(st, "parameters", None) or {}
-        if not params:
-            return ""
-        total_bytes: float = sum(
-            count * _DTYPE_BYTES.get(dtype.upper(), 2)  # default FP16
-            for dtype, count in params.items()
+        api = HfApi()
+        info = api.model_info(repo_id, files_metadata=True, token=token)
+        siblings = getattr(info, "siblings", None) or []
+        total = sum(
+            (f.size or 0)
+            for f in siblings
+            if (f.size or 0) > 0
+            and any(f.rfilename.endswith(e) for e in _MODEL_EXTS)
+            and not _should_ignore(f.rfilename)
         )
-        if total_bytes <= 0:
+        if total <= 0:
             return ""
-        gb = total_bytes / 1e9
-        return f"~{gb:.1f} GB" if gb >= 1.0 else f"~{total_bytes / 1e6:.0f} MB"
+        gb = total / 1e9
+        return f"~{gb:.1f} GB" if gb >= 1.0 else f"~{total / 1e6:.0f} MB"
     except Exception:
         return ""
 
@@ -335,7 +329,7 @@ def _parse_hub_models(raw: list) -> list[dict]:
             "author":    parts[0] if len(parts) > 1 else "",
             "downloads": getattr(m, "downloads", 0) or 0,
             "likes":     getattr(m, "likes", 0) or 0,
-            "size_str":  _safetensors_size_str(m),
+            "size_str":  "",   # filled asynchronously via fetch_model_size()
         })
     return result
 

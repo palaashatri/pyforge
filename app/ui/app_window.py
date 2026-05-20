@@ -24,15 +24,17 @@ _GEN_PAGE_INDICES = {0, 1}   # pages that need models to work
 
 class AppWindow(ctk.CTk):
     def __init__(self):
+        from app.core.config import config as _cfg
+        # set_appearance_mode MUST be called before super().__init__() so that
+        # CTk builds the root window with the correct theme from the start.
+        ctk.set_appearance_mode(_cfg.theme)
+        ctk.set_default_color_theme("blue")
+
         super().__init__(fg_color=BG)
 
         self.title("PyForge Studio")
         self.geometry("1280x820")
         self.minsize(900, 600)
-
-        from app.core.config import config as _cfg
-        ctk.set_appearance_mode(_cfg.theme)   # respects saved preference
-        ctk.set_default_color_theme("blue")
 
         self._setup_grid()
         self._build_sidebar()

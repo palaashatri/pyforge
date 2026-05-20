@@ -17,6 +17,7 @@ from ..theme import *
 from ...core.manager import (
     list_models, download_model, delete_model,
     browse_hub_models, is_model_installed, run_diagnostics,
+    fetch_model_size,
 )
 
 
@@ -54,6 +55,10 @@ class ModelsPage(ctk.CTkFrame):
         self._dl_cards:  dict[str, dict] = {}
 
         self._catalog: list[dict] = []
+        # repo_id → CTkLabel for the size field in each catalog card (updated async)
+        self._size_labels: dict[str, ctk.CTkLabel] = {}
+        # incremented each time the catalog re-renders; stale fetch batches check this
+        self._size_fetch_gen: int = 0
         self._build()
         self.after(100, self._load_installed)
         self.after(200, self._fetch_catalog)
@@ -172,6 +177,10 @@ class ModelsPage(ctk.CTkFrame):
         self._catalog = models
         self._catalog_loading.grid_remove()
 
+        # Invalidate any in-flight size fetches from a previous render
+        self._size_fetch_gen += 1
+        self._size_labels.clear()
+
         for w in self._catalog_scroll.winfo_children():
             w.destroy()
 
@@ -191,6 +200,13 @@ class ModelsPage(ctk.CTkFrame):
             self._catalog_card(self._catalog_scroll, m, row=i)
 
         self._catalog_scroll.grid()
+
+        # Kick off background size fetching for this generation of the catalog
+        token = self._token_var.get().strip() or None
+        gen   = self._size_fetch_gen
+        threading.Thread(
+            target=self._fetch_sizes, args=(gen, token), daemon=True,
+        ).start()
 
     def _catalog_card(self, parent, m: dict, row: int):
         repo_id   = m["repo_id"]
@@ -232,9 +248,13 @@ class ModelsPage(ctk.CTkFrame):
                      font=F_SM, text_color=TEXT_SEC).pack(side="left")
         ctk.CTkLabel(meta_row, text=f"   {likes} likes",
                      font=F_SM, text_color=TEXT_SEC).pack(side="left")
-        if size_str:
-            ctk.CTkLabel(meta_row, text=f"   {size_str}",
-                         font=F_SM, text_color=ACCENT).pack(side="left")
+        # Size label is always created but starts empty; _fetch_sizes fills it in
+        size_lbl = ctk.CTkLabel(
+            meta_row, text=f"   {size_str}" if size_str else "",
+            font=F_SM, text_color=ACCENT,
+        )
+        size_lbl.pack(side="left")
+        self._size_labels[repo_id] = size_lbl
 
         # Action button / badge
         if is_current_dl:
@@ -310,6 +330,40 @@ class ModelsPage(ctk.CTkFrame):
             text_color=DANGER, corner_radius=8,
             command=lambda _id=mid: self._delete_model(_id),
         ).grid(row=0, column=2, padx=(0, 10))
+
+    # ── Catalog: async size fetching ─────────────────────────────────────────
+    def _fetch_sizes(self, gen: int, token: str | None):
+        """Fetch model sizes for every catalog card using a thread pool.
+
+        Uses up to 3 concurrent workers.  If the catalog has been re-rendered
+        since this batch started (gen != self._size_fetch_gen), all remaining
+        fetches are abandoned — their labels no longer exist.
+        """
+        import concurrent.futures
+
+        def _one(m: dict):
+            # Bail early if a newer catalog render has already replaced this one
+            if gen != self._size_fetch_gen:
+                return
+            repo_id  = m["repo_id"]
+            size_str = fetch_model_size(repo_id, token=token)
+            if size_str and gen == self._size_fetch_gen:
+                self.after(0, lambda r=repo_id, s=size_str: self._update_size_label(r, s))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            futures = [pool.submit(_one, m) for m in self._catalog]
+            for f in concurrent.futures.as_completed(futures):
+                if gen != self._size_fetch_gen:
+                    # Cancel any not-yet-started futures (best-effort)
+                    for pending in futures:
+                        pending.cancel()
+                    break
+
+    def _update_size_label(self, repo_id: str, size_str: str):
+        """Update the catalog card size label on the main thread."""
+        lbl = self._size_labels.get(repo_id)
+        if lbl and lbl.winfo_exists():
+            lbl.configure(text=f"   {size_str}")
 
     # ── Download: start ───────────────────────────────────────────────────────
     def _start_download(self, repo_id: str):

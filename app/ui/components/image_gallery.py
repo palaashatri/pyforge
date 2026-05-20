@@ -1,9 +1,8 @@
 """Scrollable image gallery with hover actions."""
 import os
 import threading
-import tkinter as tk
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image
 
 from ..theme import *
 
@@ -115,10 +114,12 @@ class ImageGallery(ctk.CTkScrollableFrame):
         try:
             img = Image.open(path)
             img.thumbnail((900, 900), Image.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
+            # Use CTkImage + CTkLabel so that tuple fg_color values (light/dark
+            # theme tuples) are accepted — raw tk.Label rejects them.
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
             win.geometry(f"{img.width}x{img.height}")
-            lbl = tk.Label(win, image=photo, bg=BG_CARD)
-            lbl.image = photo
+            lbl = ctk.CTkLabel(win, image=ctk_img, text="", fg_color="transparent")
+            lbl.image = ctk_img   # keep reference alive
             lbl.pack()
         except Exception as e:
             ctk.CTkLabel(win, text=str(e), text_color=DANGER).pack(padx=20, pady=20)

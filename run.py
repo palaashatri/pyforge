@@ -16,6 +16,16 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# Pre-load any user-configured Google Font into the OS font system BEFORE
+# the CTk window is created.  On Windows this calls AddFontResourceExW so
+# GDI sees the font when the first widget is built; on macOS/Linux the font
+# was already installed to the user fonts directory on first use.
+try:
+    from app.core.fonts import load_custom_font
+    load_custom_font()
+except Exception:
+    pass
+
 from app.main import main
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ preview; bottom half is the output gallery (shared by both modes).
 import threading
 import customtkinter as ctk
 from tkinter import filedialog
-from PIL import Image, ImageTk
+from PIL import Image
 
 from ..theme import *
 from ..components.image_gallery import ImageGallery
