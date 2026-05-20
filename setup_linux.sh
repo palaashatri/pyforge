@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# PyForge Studio — Linux Setup Script
+# Run once from the project root: bash setup_linux.sh
+# Creates .venv, installs all dependencies, then prints how to launch.
+
+set -euo pipefail
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+step()  { echo; echo ">> $*"; }
+ok()    { echo "   + $*"; }
+warn()  { echo "   ! $*"; }
+fail()  { echo "   - $*" >&2; exit 1; }
+
+echo ""
+echo "  PyForge Studio -- Linux Setup"
+echo "  --------------------------------"
+
+# ── 1. Check we're on Linux ───────────────────────────────────────────────────
+if [[ "$(uname -s)" != "Linux" ]]; then
+    fail "This script is for Linux. Use setup.sh on macOS."
+fi
+ARCH="$(uname -m)"
+ok "Linux / $ARCH"
+
+# ── 2. Check for system tkinter ──────────────────────────────────────────────
+# customtkinter needs the tcl/tk dev libraries — many minimal installs omit them.
+step "Checking for tkinter..."
+if ! python3 -c "import tkinter" &>/dev/null 2>&1; then
+    warn "tkinter not found. Installing system package..."
+    if command -v apt-get &>/dev/null; then
+        sudo apt-get install -y python3-tk
+    elif command -v dnf &>/dev/null; then
+        sudo dnf install -y python3-tkinter
+    elif command -v pacman &>/dev/null; then
+        sudo pacman -S --noconfirm tk
+    else
+        fail "Cannot auto-install tkinter. Please install python3-tk (or equivalent) manually."
+    fi
+fi
+ok "tkinter available."
+
+# ── 3. Locate Python 3.10+ ────────────────────────────────────────────────────
+step "Checking Python..."
+
+PYTHON=""
+for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python; do
+    if command -v "$candidate" &>/dev/null; then
+        ver=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
+        major="${ver%%.*}"
+        minor="${ver##*.}"
+        if [[ "$major" -ge 3 && "$minor" -ge 10 ]]; then
+            PYTHON="$candidate"
+            break
+        fi
+    fi
+done
+
+if [[ -z "$PYTHON" ]]; then
+    fail "Python 3.10+ not found.
+  Ubuntu/Debian: sudo apt install python3.12 python3.12-venv
+  Fedora/RHEL:   sudo dnf install python3.12
+  Arch:          sudo pacman -S python"
+fi
+ok "Python $ver at $(command -v "$PYTHON")"
+
+# ── 4. Create virtual environment ─────────────────────────────────────────────
+step "Setting up virtual environment..."
+
+VENV=".venv"
+if [[ -f "$VENV/bin/python" ]]; then
+    ok "Existing venv found at $VENV -- reusing."
+else
+    # python3-venv must be installed (separate package on Debian/Ubuntu)
+    if ! "$PYTHON" -m venv --help &>/dev/null 2>&1; then
+        warn "venv module missing. Installing python3-venv..."
+        if command -v apt-get &>/dev/null; then
+            VER="${ver//./}"
+            sudo apt-get install -y "python${ver%.*}-venv" || sudo apt-get install -y python3-venv
+        fi
+    fi
+    "$PYTHON" -m venv "$VENV"
+    ok "Created $VENV"
+fi
+
+PIP="$VENV/bin/pip"
+VENV_PY="$VENV/bin/python"
+
+# ── 5. Core UI dependencies ───────────────────────────────────────────────────
+step "Installing UI dependencies (customtkinter, Pillow)..."
+"$PIP" install --upgrade pip --quiet
+"$PIP" install "customtkinter>=5.2.0" "Pillow>=10.0.0" --quiet
+ok "Done."
+
+# ── 6. PyTorch ────────────────────────────────────────────────────────────────
+step "Installing PyTorch..."
+
+if [[ "$ARCH" == "aarch64" ]]; then
+    warn "ARM64 detected — installing CPU-only torch (CUDA not supported on ARM Linux)."
+    "$PIP" install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+else
+    # x86_64 — default to CUDA 12.4 (supports Python 3.10–3.14)
+    warn "Defaulting to CUDA 12.4 torch. Edit this script if you need a different variant:"
+    warn "  CPU only:   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu"
+    warn "  CUDA 11.8:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118"
+    warn "  CUDA 12.1:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121"
+    "$PIP" install torch torchvision \
+        --index-url https://download.pytorch.org/whl/cu124 --quiet
+fi
+ok "PyTorch installed."
+
+# ── 7. AI / diffusion dependencies ────────────────────────────────────────────
+step "Installing AI dependencies (diffusers, transformers, huggingface_hub)..."
+"$PIP" install diffusers transformers huggingface_hub accelerate --quiet
+ok "Done."
+
+# ── 8. Optional: xFormers ─────────────────────────────────────────────────────
+warn ""
+warn "Optional: xFormers (reduces VRAM usage on NVIDIA GPUs)"
+warn "  $PIP install xformers"
+warn ""
+warn "Optional: Real-ESRGAN upscaling support"
+warn "  $PIP install realesrgan basicsr"
+
+# ── 9. Write launcher ─────────────────────────────────────────────────────────
+step "Writing launcher..."
+
+LAUNCHER="run_pyforge.sh"
+cat > "$LAUNCHER" <<'LAUNCH'
+#!/usr/bin/env bash
+# PyForge Studio launcher -- generated by setup_linux.sh
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_PY="$SCRIPT_DIR/.venv/bin/python"
+if [[ ! -x "$VENV_PY" ]]; then
+    echo "ERROR: .venv not found. Run setup_linux.sh first." >&2
+    exit 1
+fi
+exec "$VENV_PY" "$SCRIPT_DIR/run.py" "$@"
+LAUNCH
+chmod +x "$LAUNCHER"
+ok "$LAUNCHER written."
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+echo ""
+echo "  Setup complete!"
+echo ""
+echo "  To run PyForge Studio:"
+echo "    bash run_pyforge.sh"
+echo "    -- or --"
+echo "    ./.venv/bin/python run.py"
+echo ""
+echo "  Model storage:  ~/.local/share/pyforge/models"
+echo "  Outputs:        ~/.pyforge/outputs/"
+echo "  Config:         ~/.pyforge/config.json"
+echo ""

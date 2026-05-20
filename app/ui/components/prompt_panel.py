@@ -64,7 +64,7 @@ class PromptPanel(ctk.CTkScrollableFrame):
             dropdown_fg_color=BG_CARD, corner_radius=8,
         )
         self._model_combo.grid(row=0, column=0, sticky="ew")
-        ctk.CTkButton(mrow, text="↺", width=34, height=34, font=F_MD,
+        ctk.CTkButton(mrow, text="R", width=34, height=34, font=F_SM_B,
                       fg_color=BG_CARD, hover_color=BG_HOVER,
                       text_color=TEXT_SEC, corner_radius=8,
                       command=self._load_models).grid(row=0, column=1, padx=(6, 0))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import shutil
@@ -10,12 +11,30 @@ from pathlib import Path
 from typing import Optional
 
 from huggingface_hub import snapshot_download, HfApi
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from .config import config
 
 logger = logging.getLogger(__name__)
 
-_REGISTRY_FILE = "registry.json"
+_REGISTRY_FILE    = "registry.json"
+_IGNORE_PATTERNS  = ["*.msgpack", "*.h5", "flax_model*"]
+
+
+def _should_ignore(filename: str) -> bool:
+    """Return True if *filename* matches any download ignore pattern."""
+    return any(fnmatch.fnmatch(filename, pat) for pat in _IGNORE_PATTERNS)
+
+
+def _hf_cache_blobs(repo_id: str) -> Path:
+    """Return the HuggingFace local cache blobs directory for *repo_id*.
+
+    During an active download, files land here *before* being moved/linked
+    into the final destination directory, so polling this path gives accurate
+    progress even when the destination directory still looks empty.
+    """
+    slug = "models--" + repo_id.replace("/", "--")
+    return Path(HUGGINGFACE_HUB_CACHE) / slug / "blobs"
 
 
 @dataclass
@@ -84,18 +103,23 @@ def download_model(
     alias: Optional[str] = None,
     token: Optional[str] = None,
     progress: Optional[dict] = None,
-) -> ModelInfo:
+    stop_event: Optional[threading.Event] = None,
+) -> Optional[ModelInfo]:
     """
     Download a model from HuggingFace.
 
     Pass a shared ``progress`` dict to get live updates while the download
     runs in a background thread.  The dict will have these keys set:
-        progress    float 0-1
+        progress    float 0–1
         message     str
         speed_mbps  float
         eta_seconds int
-        done        bool   (True when complete or errored)
-        error       str | None
+        done        bool   (True when complete, cancelled, or errored)
+        error       str | None  ("Cancelled" if stop_event was set)
+
+    Pass a ``stop_event`` (threading.Event) to support cancellation.  The
+    download aborts at the next file boundary and cleans up partial files.
+    Returns ``None`` if the download was cancelled.
     """
     model_id = repo_id.replace("/", "--")
     dest = config.models_dir / model_id
@@ -103,66 +127,120 @@ def download_model(
 
     logger.info("Downloading %s to %s", repo_id, dest)
 
-    # Fetch total size from HuggingFace API (best-effort)
-    total_bytes = 0
+    # Fetch file list and total size from HuggingFace API (best-effort).
+    # The file list lets us download file-by-file so cancellation works.
+    total_bytes: int = 0
+    files_to_download: list[str] = []
     try:
         api = HfApi()
         repo_info = api.repo_info(repo_id, token=token)
         if repo_info and hasattr(repo_info, "siblings") and repo_info.siblings:
-            total_bytes = sum(f.size or 0 for f in repo_info.siblings)
+            for f in repo_info.siblings:
+                fname = getattr(f, "rfilename", "") or ""
+                if fname and not _should_ignore(fname):
+                    files_to_download.append(fname)
+                    total_bytes += getattr(f, "size", 0) or 0
     except Exception as e:
-        logger.warning("Could not fetch repo size: %s", e)
+        logger.warning("Could not fetch repo info: %s", e)
 
-    start_time = time.time()
-    last_bytes = [0]
-    last_time  = [start_time]
-    stop_poll  = threading.Event()
+    # During download, HuggingFace writes blobs to its local cache directory
+    # *before* moving/linking them into dest.  Polling only dest therefore
+    # returns 0 for most of the download time.  We poll both and take the max.
+    blobs_dir = _hf_cache_blobs(repo_id)
+    stop_poll = threading.Event()
 
     def _poll():
+        last_bytes = 0
+        last_time  = time.time()
         while not stop_poll.is_set():
-            current_bytes = _dir_size_bytes(dest)
+            dest_bytes    = _dir_size_bytes(dest)
+            cache_bytes   = _dir_size_bytes(blobs_dir)
+            current_bytes = max(dest_bytes, cache_bytes)
+
             now     = time.time()
-            elapsed = now - last_time[0]
-            delta   = current_bytes - last_bytes[0]
-            speed   = delta / elapsed if elapsed > 0 else 0
+            elapsed = max(now - last_time, 0.001)
+            delta   = current_bytes - last_bytes
+            speed   = delta / elapsed
 
             if total_bytes > 0:
                 prog = min(current_bytes / total_bytes, 0.99)
                 eta  = int((total_bytes - current_bytes) / speed) if speed > 0 else 0
                 msg  = (
-                    f"Downloading {repo_id} — "
-                    f"{current_bytes/1e9:.2f} / {total_bytes/1e9:.2f} GB  "
-                    f"({speed/1e6:.1f} MB/s)"
+                    f"{current_bytes / 1e9:.2f} / {total_bytes / 1e9:.2f} GB"
+                    f"  ·  {speed / 1e6:.1f} MB/s"
                 )
             else:
                 prog = 0.0
                 eta  = 0
-                msg  = f"Downloading {repo_id} — {current_bytes/1e9:.2f} GB"
+                msg  = f"{current_bytes / 1e9:.2f} GB downloaded"
 
             if progress is not None:
-                progress.update(progress=round(prog, 4),
-                                speed_mbps=round(speed / 1e6, 2),
-                                eta_seconds=eta,
-                                message=msg,
-                                done=False, error=None)
+                progress.update(
+                    progress=round(prog, 4),
+                    speed_mbps=round(speed / 1e6, 2),
+                    eta_seconds=eta,
+                    message=msg,
+                    done=False,
+                    error=None,
+                )
 
-            last_bytes[0] = current_bytes
-            last_time[0]  = now
+            last_bytes = current_bytes
+            last_time  = now
             time.sleep(0.5)
 
     poll_thread = threading.Thread(target=_poll, daemon=True)
     poll_thread.start()
 
+    cancelled = False
     try:
-        snapshot_download(
-            repo_id=repo_id,
-            local_dir=str(dest),
-            token=token,
-            ignore_patterns=["*.msgpack", "*.h5", "flax_model*"],
-        )
+        if files_to_download:
+            # File-by-file via hf_hub_download: allows checking stop_event
+            # between files and gives accurate per-file progress.
+            from huggingface_hub import hf_hub_download
+            for fname in files_to_download:
+                if stop_event and stop_event.is_set():
+                    cancelled = True
+                    break
+                try:
+                    hf_hub_download(
+                        repo_id=repo_id,
+                        filename=fname,
+                        local_dir=str(dest),
+                        token=token,
+                    )
+                except Exception:
+                    if stop_event and stop_event.is_set():
+                        cancelled = True
+                        break
+                    raise
+        else:
+            # Fallback when file list could not be retrieved
+            snapshot_download(
+                repo_id=repo_id,
+                local_dir=str(dest),
+                token=token,
+                ignore_patterns=_IGNORE_PATTERNS,
+            )
     finally:
         stop_poll.set()
         poll_thread.join(timeout=2)
+
+    if cancelled:
+        try:
+            shutil.rmtree(dest, ignore_errors=True)
+        except Exception:
+            pass
+        if progress is not None:
+            progress.update(
+                progress=0.0,
+                message="Download cancelled.",
+                speed_mbps=0,
+                eta_seconds=0,
+                done=True,
+                error="Cancelled",
+            )
+        logger.info("Download cancelled: %s", repo_id)
+        return None
 
     info = ModelInfo(
         model_id=model_id,
@@ -177,8 +255,14 @@ def download_model(
     _save_registry(reg)
 
     if progress is not None:
-        progress.update(progress=1.0, message="Download complete!",
-                        speed_mbps=0, eta_seconds=0, done=True, error=None)
+        progress.update(
+            progress=1.0,
+            message="Download complete!",
+            speed_mbps=0,
+            eta_seconds=0,
+            done=True,
+            error=None,
+        )
 
     logger.info("Registered model %s", model_id)
     return info
@@ -199,6 +283,44 @@ def _hf_version() -> str:
         return "unknown"
 
 
+# bytes per parameter for common safetensors dtypes
+_DTYPE_BYTES: dict[str, float] = {
+    "F64":  8, "I64": 8,
+    "F32":  4, "I32": 4,
+    "F16":  2, "BF16": 2, "I16": 2,
+    "I8":   1, "U8":  1, "F8_E4M3": 1, "F8_E5M2": 1,
+    "I4":   0.5, "U4": 0.5,
+}
+
+
+def _safetensors_size_str(m) -> str:
+    """Estimate download size from the model's safetensors metadata.
+
+    HuggingFace model objects returned by list_models() may carry a
+    ``safetensors`` attribute with a ``parameters`` dict that maps dtype
+    names to parameter counts.  We multiply counts by bytes-per-param to
+    get an approximate download size — no extra API calls required.
+    Returns an empty string when the metadata is unavailable.
+    """
+    try:
+        st = getattr(m, "safetensors", None)
+        if st is None:
+            return ""
+        params: dict = getattr(st, "parameters", None) or {}
+        if not params:
+            return ""
+        total_bytes: float = sum(
+            count * _DTYPE_BYTES.get(dtype.upper(), 2)  # default FP16
+            for dtype, count in params.items()
+        )
+        if total_bytes <= 0:
+            return ""
+        gb = total_bytes / 1e9
+        return f"~{gb:.1f} GB" if gb >= 1.0 else f"~{total_bytes / 1e6:.0f} MB"
+    except Exception:
+        return ""
+
+
 def _parse_hub_models(raw: list) -> list[dict]:
     result = []
     for m in raw:
@@ -213,6 +335,7 @@ def _parse_hub_models(raw: list) -> list[dict]:
             "author":    parts[0] if len(parts) > 1 else "",
             "downloads": getattr(m, "downloads", 0) or 0,
             "likes":     getattr(m, "likes", 0) or 0,
+            "size_str":  _safetensors_size_str(m),
         })
     return result
 

@@ -4,10 +4,11 @@ Layout
 ------
 Header row: title + Refresh button
 Token row:  optional HF token for gated/private models
-Download progress bar (shown only while a download is active)
+Downloads:  one progress card per active download (hidden when idle)
 CTkTabview
   Discover   — live HuggingFace catalog (text-to-image, sorted by downloads)
   Installed  — locally installed models with delete buttons
+  Diagnostics — environment / package checks
 """
 import threading
 import customtkinter as ctk
@@ -28,14 +29,30 @@ def _fmt_count(n: int) -> str:
     return str(n)
 
 
+def _fmt_eta(seconds: int) -> str:
+    """Format ETA seconds as a human-readable string."""
+    if seconds <= 0:
+        return ""
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        m, s = divmod(seconds, 60)
+        return f"{m}m {s:02d}s"
+    h, rem = divmod(seconds, 3600)
+    return f"{h}h {rem // 60:02d}m"
+
+
 class ModelsPage(ctk.CTkFrame):
     def __init__(self, parent, show_toast=None, **kw):
         kw.setdefault("fg_color", BG)
         super().__init__(parent, **kw)
-        self._toast       = show_toast
-        self._dl_active   = False
-        self._dl_progress: dict = {}
-        self._dl_repo     = ""        # repo_id currently being downloaded
+        self._toast = show_toast
+
+        # repo_id → {"progress": dict, "stop_event": Event}
+        self._downloads: dict[str, dict] = {}
+        # repo_id → {"card": CTkFrame, "bar": CTkProgressBar, "pct": CTkLabel, "msg": CTkLabel}
+        self._dl_cards:  dict[str, dict] = {}
+
         self._catalog: list[dict] = []
         self._build()
         self.after(100, self._load_installed)
@@ -44,7 +61,7 @@ class ModelsPage(ctk.CTkFrame):
     # ── Build ─────────────────────────────────────────────────────────────────
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)   # tabview expands
 
         # ── Header ────────────────────────────────────────────────────────────
         hdr = ctk.CTkFrame(self, fg_color="transparent")
@@ -55,7 +72,7 @@ class ModelsPage(ctk.CTkFrame):
                      ).grid(row=0, column=0, sticky="w")
 
         self._refresh_btn = ctk.CTkButton(
-            hdr, text="↺  Refresh", width=110, height=32, font=F_SM,
+            hdr, text="Refresh", width=90, height=32, font=F_SM,
             fg_color=BG_CARD, hover_color=BG_HOVER, text_color=TEXT_SEC,
             corner_radius=8, command=self._refresh,
         )
@@ -77,39 +94,13 @@ class ModelsPage(ctk.CTkFrame):
             border_color=BORDER, corner_radius=8,
         ).grid(row=0, column=1, sticky="ew")
 
-        # ── Download progress (hidden until active) ────────────────────────────
-        self._prog_card = ctk.CTkFrame(
-            self, fg_color=BG_PANEL, corner_radius=10,
-            border_color=ACCENT_TINT_CARD, border_width=1,
-        )
-        self._prog_card.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 6))
-        self._prog_card.grid_columnconfigure(0, weight=1)
-        self._prog_card.grid_remove()
-
-        prog_inner = ctk.CTkFrame(self._prog_card, fg_color="transparent")
-        prog_inner.grid(row=0, column=0, padx=16, pady=(10, 8), sticky="ew")
-        prog_inner.grid_columnconfigure(0, weight=1)
-
-        self._prog_title = ctk.CTkLabel(
-            prog_inner, text="", font=F_SM_B, text_color=TEXT,
-        )
-        self._prog_title.grid(row=0, column=0, sticky="w")
-        self._prog_pct = ctk.CTkLabel(
-            prog_inner, text="0%", font=F_SM_B, text_color=ACCENT,
-        )
-        self._prog_pct.grid(row=0, column=1, sticky="e")
-
-        self._prog_msg = ctk.CTkLabel(
-            prog_inner, text="Starting…", font=F_SM, text_color=TEXT_MUTED,
-        )
-        self._prog_msg.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 4))
-
-        self._prog_bar = ctk.CTkProgressBar(
-            prog_inner, height=6,
-            fg_color=BG_INPUT, progress_color=ACCENT, corner_radius=3,
-        )
-        self._prog_bar.grid(row=2, column=0, columnspan=2, sticky="ew")
-        self._prog_bar.set(0)
+        # ── Active downloads container ────────────────────────────────────────
+        # One download card is packed inside here per active download.
+        # Hidden when no downloads are running.
+        self._dl_container = ctk.CTkFrame(self, fg_color="transparent")
+        self._dl_container.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 4))
+        self._dl_container.grid_columnconfigure(0, weight=1)
+        self._dl_container.grid_remove()
 
         # ── Tab view ──────────────────────────────────────────────────────────
         self._tabs = ctk.CTkTabview(
@@ -123,7 +114,7 @@ class ModelsPage(ctk.CTkFrame):
             border_color=BORDER, border_width=1,
             corner_radius=12,
         )
-        self._tabs.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self._tabs.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
         self._tabs.add("Discover")
         self._tabs.add("Installed")
         self._tabs.add("Diagnostics")
@@ -185,7 +176,7 @@ class ModelsPage(ctk.CTkFrame):
             w.destroy()
 
         if not models:
-            msg = error or "No results returned."
+            msg  = error or "No results returned."
             hint = "\n\nOpen the Diagnostics tab for details." if error else ""
             ctk.CTkLabel(
                 self._catalog_scroll,
@@ -207,8 +198,9 @@ class ModelsPage(ctk.CTkFrame):
         author    = m["author"]
         downloads = _fmt_count(m.get("downloads", 0))
         likes     = _fmt_count(m.get("likes", 0))
-        installed = is_model_installed(repo_id)
-        is_current_dl = (self._dl_active and self._dl_repo == repo_id)
+        size_str      = m.get("size_str", "")
+        installed     = is_model_installed(repo_id)
+        is_current_dl = repo_id in self._downloads
 
         card = ctk.CTkFrame(
             parent, fg_color=BG_CARD, corner_radius=10,
@@ -236,21 +228,24 @@ class ModelsPage(ctk.CTkFrame):
         meta_row.pack(fill="x", pady=(2, 0))
         ctk.CTkLabel(meta_row, text=f"by {author}", font=F_SM,
                      text_color=TEXT_MUTED).pack(side="left")
-        ctk.CTkLabel(meta_row, text=f"  ↓ {downloads}",
+        ctk.CTkLabel(meta_row, text=f"   {downloads} dl",
                      font=F_SM, text_color=TEXT_SEC).pack(side="left")
-        ctk.CTkLabel(meta_row, text=f"  ♥ {likes}",
+        ctk.CTkLabel(meta_row, text=f"   {likes} likes",
                      font=F_SM, text_color=TEXT_SEC).pack(side="left")
+        if size_str:
+            ctk.CTkLabel(meta_row, text=f"   {size_str}",
+                         font=F_SM, text_color=ACCENT).pack(side="left")
 
         # Action button / badge
         if is_current_dl:
-            ctk.CTkLabel(card, text="Downloading…", font=F_SM_B,
+            ctk.CTkLabel(card, text="Downloading...", font=F_SM_B,
                          text_color=ACCENT).grid(row=0, column=2, padx=(0, 14))
         elif installed:
-            ctk.CTkLabel(card, text="✓ Installed", font=F_SM_B,
+            ctk.CTkLabel(card, text="Installed", font=F_SM_B,
                          text_color=SUCCESS).grid(row=0, column=2, padx=(0, 14))
         else:
             ctk.CTkButton(
-                card, text="⬇  Download", width=110, height=34, font=F_SM_B,
+                card, text="Download", width=100, height=34, font=F_SM_B,
                 fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#fff",
                 corner_radius=8,
                 command=lambda r=repo_id: self._start_download(r),
@@ -310,81 +305,174 @@ class ModelsPage(ctk.CTkFrame):
                      font=F_SM, text_color=TEXT_SEC).pack(anchor="w")
 
         ctk.CTkButton(
-            card, text="✕", width=32, height=32, font=F_MD,
+            card, text="X", width=32, height=32, font=F_SM_B,
             fg_color="transparent", hover_color=blend_hex(DANGER, BG_CARD, 0.25),
             text_color=DANGER, corner_radius=8,
             command=lambda _id=mid: self._delete_model(_id),
         ).grid(row=0, column=2, padx=(0, 10))
 
-    # ── Download ──────────────────────────────────────────────────────────────
+    # ── Download: start ───────────────────────────────────────────────────────
     def _start_download(self, repo_id: str):
-        if self._dl_active:
+        if repo_id in self._downloads:
             if self._toast:
-                self._toast("A download is already in progress.", "info")
+                self._toast("This model is already downloading.", "info")
             return
 
-        self._dl_active   = True
-        self._dl_repo     = repo_id
-        self._dl_progress = {"progress": 0.0, "message": "", "done": False, "error": None}
-
-        short = repo_id.split("/")[-1] if "/" in repo_id else repo_id
-        self._prog_title.configure(text=f"Downloading  {short}")
-        self._prog_msg.configure(text="Connecting…")
-        self._prog_bar.set(0)
-        self._prog_pct.configure(text="0%")
-        self._prog_card.grid()
-
-        # Re-render the catalog so the clicked card shows "Downloading…"
-        self._render_catalog(self._catalog)
+        stop_ev = threading.Event()
+        prog = {
+            "progress": 0.0, "message": "", "speed_mbps": 0.0,
+            "eta_seconds": 0, "done": False, "error": None,
+        }
+        self._downloads[repo_id] = {"progress": prog, "stop_event": stop_ev}
+        self._add_dl_card(repo_id)
+        self._render_catalog(self._catalog)   # update badges in Discover tab
 
         token = self._token_var.get().strip() or None
-        prog  = self._dl_progress
 
         def _run():
             try:
-                download_model(repo_id=repo_id, token=token, progress=prog)
+                download_model(
+                    repo_id=repo_id, token=token,
+                    progress=prog, stop_event=stop_ev,
+                )
             except Exception as e:
                 prog["done"]  = True
                 prog["error"] = str(e)
 
         threading.Thread(target=_run, daemon=True).start()
-        self._poll_progress()
 
-    def _poll_progress(self):
-        if not self._dl_active:
+        # Start poll loop only when the first download begins
+        if len(self._downloads) == 1:
+            self.after(300, self._poll_all_downloads)
+
+    # ── Download: progress card UI ────────────────────────────────────────────
+    def _add_dl_card(self, repo_id: str):
+        """Create and pack a progress card for *repo_id* into _dl_container."""
+        short = repo_id.split("/")[-1] if "/" in repo_id else repo_id
+        self._dl_container.grid()   # make container visible
+
+        card = ctk.CTkFrame(
+            self._dl_container, fg_color=BG_PANEL, corner_radius=10,
+            border_color=ACCENT_TINT_CARD, border_width=1,
+        )
+        card.pack(fill="x", pady=(0, 4))
+        card.grid_columnconfigure(0, weight=1)
+
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="x", padx=14, pady=(10, 10))
+        inner.grid_columnconfigure(0, weight=1)
+
+        # Row 0: model name  |  percentage  |  cancel button
+        title_row = ctk.CTkFrame(inner, fg_color="transparent")
+        title_row.grid(row=0, column=0, sticky="ew")
+        title_row.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            title_row, text=short, font=F_SM_B, text_color=TEXT, anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+
+        pct_lbl = ctk.CTkLabel(title_row, text="0%", font=F_SM_B, text_color=ACCENT)
+        pct_lbl.grid(row=0, column=1, padx=(8, 0))
+
+        ctk.CTkButton(
+            title_row, text="Cancel", width=80, height=26, font=F_SM,
+            fg_color="transparent",
+            hover_color=blend_hex(DANGER, BG_PANEL, 0.25),
+            text_color=DANGER, corner_radius=6,
+            border_color=DANGER, border_width=1,
+            command=lambda r=repo_id: self._cancel_download(r),
+        ).grid(row=0, column=2, padx=(10, 0))
+
+        # Row 1: progress bar
+        bar = ctk.CTkProgressBar(
+            inner, height=5,
+            fg_color=BG_INPUT, progress_color=ACCENT, corner_radius=3,
+        )
+        bar.grid(row=1, column=0, sticky="ew", pady=(5, 3))
+        bar.set(0)
+
+        # Row 2: status message (size · speed · ETA)
+        msg_lbl = ctk.CTkLabel(
+            inner, text="Connecting…", font=F_SM, text_color=TEXT_MUTED, anchor="w",
+        )
+        msg_lbl.grid(row=2, column=0, sticky="w")
+
+        self._dl_cards[repo_id] = {
+            "card": card,
+            "bar":  bar,
+            "pct":  pct_lbl,
+            "msg":  msg_lbl,
+        }
+
+    # ── Download: poll loop ───────────────────────────────────────────────────
+    def _poll_all_downloads(self):
+        if not self._downloads:
             return
 
-        prog = self._dl_progress
-        pct  = prog.get("progress", 0.0)
-        msg  = prog.get("message", "")
-        done = prog.get("done", False)
-        err  = prog.get("error")
+        finished: list[tuple[str, str | None]] = []
 
-        self._prog_bar.set(pct)
-        self._prog_pct.configure(text=f"{int(pct * 100)}%")
-        if msg:
-            self._prog_msg.configure(text=msg)
+        for repo_id, state in list(self._downloads.items()):
+            prog  = state["progress"]
+            cards = self._dl_cards.get(repo_id, {})
 
-        if err:
-            self._dl_active = False
-            self._dl_repo   = ""
-            self._prog_card.grid_remove()
+            pct  = prog.get("progress", 0.0)
+            msg  = prog.get("message", "")
+            eta  = prog.get("eta_seconds", 0)
+            done = prog.get("done", False)
+            err  = prog.get("error")
+
+            if bar := cards.get("bar"):
+                bar.set(pct)
+            if pct_lbl := cards.get("pct"):
+                pct_lbl.configure(text=f"{int(pct * 100)}%")
+            if msg_lbl := cards.get("msg"):
+                eta_str = _fmt_eta(eta)
+                full_msg = f"{msg}  ·  ETA {eta_str}" if eta_str and msg else msg
+                if full_msg:
+                    msg_lbl.configure(text=full_msg)
+
+            if done:
+                finished.append((repo_id, err))
+
+        for repo_id, err in finished:
+            self._finish_download(repo_id, err)
+
+        if self._downloads:
+            self.after(300, self._poll_all_downloads)
+        else:
+            self._dl_container.grid_remove()
+
+    # ── Download: cancel ──────────────────────────────────────────────────────
+    def _cancel_download(self, repo_id: str):
+        state = self._downloads.get(repo_id)
+        if state:
+            state["stop_event"].set()
+        # The poll loop will see done=True / error="Cancelled" and clean up
+
+    # ── Download: finish ──────────────────────────────────────────────────────
+    def _finish_download(self, repo_id: str, error: str | None):
+        self._downloads.pop(repo_id, None)
+
+        card_widgets = self._dl_cards.pop(repo_id, {})
+        card = card_widgets.get("card")
+        if card and card.winfo_exists():
+            card.destroy()
+
+        if error == "Cancelled":
             if self._toast:
-                self._toast(f"Download failed: {err}", "error")
-            self._render_catalog(self._catalog)
-            return
-
-        if done:
-            self._dl_active = False
-            self._dl_repo   = ""
-            self._prog_card.grid_remove()
+                self._toast("Download cancelled.", "info")
+        elif error:
+            if self._toast:
+                self._toast(f"Download failed: {error}", "error")
+        else:
             if self._toast:
                 self._toast("Model downloaded successfully!", "success")
             self._load_installed()
-            self._render_catalog(self._catalog)   # refresh "Installed" badges
-            return
 
-        self.after(300, self._poll_progress)
+        self._render_catalog(self._catalog)   # refresh Installed / Downloading badges
+
+        if not self._downloads:
+            self._dl_container.grid_remove()
 
     # ── Delete ────────────────────────────────────────────────────────────────
     def _delete_model(self, model_id: str):
@@ -414,7 +502,7 @@ class ModelsPage(ctk.CTkFrame):
         self._diag_status.grid(row=0, column=0, sticky="w")
 
         ctk.CTkButton(
-            top, text="▶  Run Diagnostics", width=150, height=32, font=F_SM_B,
+            top, text="Run Diagnostics", width=150, height=32, font=F_SM_B,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#fff",
             corner_radius=8, command=self._run_diagnostics,
         ).grid(row=0, column=1)
@@ -452,7 +540,7 @@ class ModelsPage(ctk.CTkFrame):
             "warn":  WARNING,
             "info":  TEXT_MUTED,
         }
-        _STATUS_ICON = {"ok": "✓", "error": "✗", "warn": "⚠", "info": "·"}
+        _STATUS_ICON = {"ok": "ok", "error": "err", "warn": "!", "info": "."}
 
         current_section = None
         r = 0

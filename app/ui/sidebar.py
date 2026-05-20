@@ -4,11 +4,11 @@ from .theme import *
 
 
 _NAV = [
-    # (icon, label, section)
-    ("✦", "Text to Image",  "GENERATE"),
-    ("◈", "Image to Image", None),
-    ("⬡", "Models",         "LIBRARY"),
-    ("⚙", "Settings",       None),
+    # (label, section-header-or-None)
+    ("Text to Image",  "GENERATE"),
+    ("Image to Image", None),
+    ("Models",         "LIBRARY"),
+    ("Settings",       None),
 ]
 
 
@@ -52,7 +52,7 @@ class Sidebar(ctk.CTkFrame):
         nav_container.pack(fill="both", expand=True, padx=8, pady=4)
 
         idx = 0
-        for icon, label, section in _NAV:
+        for label, section in _NAV:
             if section:
                 ctk.CTkLabel(
                     nav_container, text=section, font=(FONT_FACE, 10, "bold"),
@@ -61,7 +61,7 @@ class Sidebar(ctk.CTkFrame):
 
             btn = ctk.CTkButton(
                 nav_container,
-                text=f"  {icon}   {label}",
+                text=f"   {label}",
                 anchor="w",
                 height=40,
                 font=F_MD,

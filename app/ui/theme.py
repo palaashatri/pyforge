@@ -1,5 +1,6 @@
 """Colour palette and font helpers shared across all UI modules."""
 import platform
+import sys
 
 
 def blend_hex(fg: str, bg: str, alpha: float) -> str:
@@ -52,7 +53,28 @@ BORDER_LIGHT = "#32324a"
 
 # ── Fonts ─────────────────────────────────────────────────────────────────────
 _sys = platform.system()
-FONT_FACE = "Segoe UI" if _sys == "Windows" else ("SF Pro Display" if _sys == "Darwin" else "Noto Sans")
+
+
+def _pick_font() -> str:
+    """Return the best available font face for this OS / version."""
+    if _sys == "Darwin":
+        return "SF Pro Display"
+    if _sys == "Windows":
+        try:
+            v = sys.getwindowsversion()
+            # Windows 11 = NT 10.0, build >= 22000  →  "Segoe UI Variable" is
+            # a modern variable font that renders much sharper than "Segoe UI".
+            if v.major >= 10 and v.build >= 22000:
+                return "Segoe UI Variable"
+        except Exception:
+            pass
+        return "Segoe UI"
+    # Linux — "Noto Sans" is present on most modern distros; Tk falls back
+    # gracefully to its default if the font is not installed.
+    return "Noto Sans"
+
+
+FONT_FACE = _pick_font()
 
 def font(size=13, bold=False):
     return (FONT_FACE, size, "bold") if bold else (FONT_FACE, size)
