@@ -4,15 +4,28 @@ A cross-platform desktop app for local AI image generation — built entirely in
 
 ## Features
 
-- **Text to Image** — SD 1.5 / SDXL / Flux, full prompt + CFG + seed + batch controls
+- **Text to Image** — SD 1.5 / SDXL checkpoints, full prompt + CFG + seed + batch controls (Flux models are detected by name but not yet supported)
 - **Image to Image** — strength-controlled variations with live input preview
 - **Upscaler** — continuous 1×–8× scale via Real-ESRGAN or latent fallback, integrated into the Image to Image page
-- **Inpainting** — brush mask drawn on canvas, prompt-guided fill
-- **ControlNet** — 6 conditioning types (Canny, Depth, Pose, …) with conditioning scale
 - **Model Manager** — browse top HuggingFace text-to-image models sorted by downloads, one-click download with live progress bar, per-download cancel, and parallel downloads. Model sizes shown in the catalog.
 - **Settings** — device (CUDA / MPS / CPU), xFormers, image format, output directory, dark/light/system theme
 - **Developer font picker** — drop any `.ttf`/`.otf` into `.fonts/`, pick from a dropdown in Settings, restart to apply
 - **100% local** — all processing runs on your machine after the initial model download
+
+> **Not in the app yet:** inpainting and ControlNet have backend functions in `app/core/pipelines.py` (`generate_inpaint`, `generate_controlnet`) but no page, so they can't be used from the UI.
+
+## Roadmap
+
+In priority order — each is something a user would notice:
+
+1. **Inpainting page**: brush a mask over an image and regenerate that area (the backend already exists).
+2. **ControlNet page**: pick a control image and type (Canny, Depth, Pose…) — backend already exists.
+3. **Cancel a running generation** from the UI, with a per-step progress bar.
+4. **Flux and SD 3.5 support** through their own diffusers pipelines.
+5. **A one-click installer** (the PyInstaller specs in `packaging/` exist but have not been verified) so users don't set up Python and PyTorch themselves.
+6. **History you can re-run**: click a past image to restore its prompt, seed and settings.
+
+If you also keep [JForge](https://github.com/palaashatri/jforge) (the same idea on the JVM), decide which one is the product; maintaining both doubles the work.
 
 ## Quick start
 
@@ -89,9 +102,6 @@ pyforge-station/
       pages/
         txt2img_page.py
         img2img_page.py    includes Upscale mode
-        inpaint_page.py
-        upscale_page.py
-        controlnet_page.py
         models_page.py     Discover / Installed / Diagnostics tabs
         settings_page.py
   packaging/
