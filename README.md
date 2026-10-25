@@ -144,3 +144,11 @@ See the platform-specific build instructions:
 - `customtkinter >= 5.2.0`, `Pillow >= 10.0.0`
 - `torch`, `diffusers`, `transformers`, `huggingface_hub >= 1.0`, `accelerate`
 - Optional: `xformers` (VRAM reduction), `realesrgan` + `basicsr` (Real-ESRGAN upscaling)
+
+## Planned SLOPOS, PARAMA and edge-device support
+
+pyforge is an original project considered for SLOPOS's **optional first-party catalog**, not required in its minimal image. Linux/SLOPOS GUI support must be demonstrated through real desktop integration; **PARAMA remains a conditional native source-port goal** after its actual process, graphics, files, ABI and toolkit dependencies exist. This is a platform roadmap, not a build/compatibility claim.
+
+**Raspberry Pi Zero 2 W efficiency:** Separate lightweight UI/metadata browsing from model loading; strictly cap preview images, history, download buffers and Python worker memory. Perform model size and CPU/RAM/GPU preflight before importing/loading torch/diffusers where architecture permits. Do not imply 512 MB supports diffusion; on Zero 2 W use a truthful capability-disabled UI or an opt-in remote worker **only when explicitly implemented and consented**. No hidden internet dependency or silent upload of prompts/images.
+
+See [AGENTS.md](AGENTS.md#future-sloposparama-platforms-and-raspberry-pi-zero-2-w-efficiency) for measurable acceptance and restrictions. No actual Pi Zero 2 W or PARAMA acceptance has been performed.
