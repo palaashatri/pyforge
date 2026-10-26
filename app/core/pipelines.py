@@ -50,9 +50,14 @@ def _load_txt2img(model_id: str):
         from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
         path = get_model_path(model_id)
         try:
-            pipe = StableDiffusionXLPipeline.from_pretrained(
-                str(path), torch_dtype=_dtype(), use_safetensors=True
-            )
+            # Flux models
+            if "flux" in model_id.lower():
+                from diffusers import FluxPipeline
+                pipe = FluxPipeline.from_pretrained(str(path), torch_dtype=_dtype())
+            else:
+                pipe = StableDiffusionXLPipeline.from_pretrained(
+                    str(path), torch_dtype=_dtype(), use_safetensors=True
+                )
         except Exception:
             pipe = StableDiffusionPipeline.from_pretrained(
                 str(path), torch_dtype=_dtype(), use_safetensors=True
