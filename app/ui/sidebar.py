@@ -7,6 +7,8 @@ _NAV = [
     # (label, section-header-or-None)
     ("Text to Image",  "GENERATE"),
     ("Image to Image", None),
+    ("Inpainting",     None),
+    ("ControlNet",     None),
     ("Models",         "LIBRARY"),
     ("Settings",       None),
 ]

@@ -8,12 +8,16 @@ from .topbar import TopBar
 from .components.toast import Toast
 from .pages.txt2img_page import TextToImagePage
 from .pages.img2img_page import ImageToImagePage
+from .pages.inpaint_page import InpaintPage
+from .pages.controlnet_page import ControlNetPage
 from .pages.models_page import ModelsPage
 from .pages.settings_page import SettingsPage
 
 _PAGES = [
     ("Text to Image",  TextToImagePage),
     ("Image to Image", ImageToImagePage),
+    ("Inpainting",     InpaintPage),
+    ("ControlNet",     ControlNetPage),
     ("Models",         ModelsPage),
     ("Settings",       SettingsPage),
 ]
