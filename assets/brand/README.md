@@ -1,3 +1,3 @@
-# PYFORGE brand asset family
+# PyForge visual identity
 
-Original coordinated vector identity for Python AI workbench. Includes full-color application icon, monochrome mark, horizontal wordmark, 1200×630 social preview, and palette tokens. All assets are source SVGs and scale losslessly. Export standard raster sizes with Inkscape or any SVG renderer. Existing application resources are untouched pending visual review.
+Original dimensional blue/gold Python double-serpent tile. Includes rendered transparent PNG and exports 16–1024px, ICO, ICNS, graphic wordmark, and repository social banner. Supersedes rejected flat SVG icon art. Large exports resample a ~248px source crop from a generated contact sheet, rather than independently rendered 1024px originals. Keep draft pending small-size QA and actual app packaging integration.
