@@ -1,0 +1,13 @@
+{
+  "name": "PyForge",
+  "category": "Local image studio",
+  "background": [
+    "#584944",
+    "#332d35"
+  ],
+  "accent": "#d9b09a",
+  "highlight": "#f7e5d4",
+  "typography": "Inter, Segoe UI, Arial",
+  "style": "muted-metal / enamel / soft-depth",
+  "license": "original project artwork"
+}

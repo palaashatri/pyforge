@@ -1,5 +1,10 @@
 # PyForge Studio
 
+<img src="assets/brand/app-icon.svg" alt="PyForge icon" width="96" align="right" />
+
+[Icon, wordmark, and brand assets](assets/brand/README.md)
+
+
 A cross-platform desktop app for local AI image generation — built entirely in Python with a customtkinter UI and Diffusers backend. No cloud, no telemetry, no separate server process.
 
 ## Features
