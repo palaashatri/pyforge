@@ -6,13 +6,15 @@ A cross-platform desktop app for local AI image generation — built entirely in
 
 - **Text to Image** — SD 1.5 / SDXL checkpoints, full prompt + CFG + seed + batch controls (Flux models are detected by name but not yet supported)
 - **Image to Image** — strength-controlled variations with live input preview
+- **Inpainting** — paint a mask and regenerate the region
+- **ControlNet** — guide generation with Canny/Depth/Pose/etc. control images
 - **Upscaler** — continuous 1×–8× scale via Real-ESRGAN or latent fallback, integrated into the Image to Image page
 - **Model Manager** — browse top HuggingFace text-to-image models sorted by downloads, one-click download with live progress bar, per-download cancel, and parallel downloads. Model sizes shown in the catalog.
 - **Settings** — device (CUDA / MPS / CPU), xFormers, image format, output directory, dark/light/system theme
 - **Developer font picker** — drop any `.ttf`/`.otf` into `.fonts/`, pick from a dropdown in Settings, restart to apply
 - **100% local** — all processing runs on your machine after the initial model download
 
-> **Not in the app yet:** inpainting and ControlNet have backend functions in `app/core/pipelines.py` (`generate_inpaint`, `generate_controlnet`) but no page, so they can't be used from the UI.
+> Inpainting and ControlNet pages are now available. Flux models are loaded via FluxPipeline when detected by name.
 
 ## Roadmap
 

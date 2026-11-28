@@ -12,10 +12,12 @@ What the UI actually exposes:
 |---|---|---|
 | Text to Image | `generate_txt2img()` | Works for SD 1.5 and SDXL checkpoints |
 | Image to Image (+ upscale) | `generate_img2img()`, `generate_upscale()` | Works; upscale uses Real-ESRGAN if installed, else latent fallback |
+| Inpainting | `generate_inpaint()` | Page added; mask painting + regeneration |
+| ControlNet | `generate_controlnet()` | Page added; type selection + control image |
 | Models | `list_models()`, `download_model()`, `delete_model()`, `fetch_model_size()` | Works |
 | Settings | `config.update()` | Works |
 
-Not reachable from the UI, despite README claims: **inpainting** (`generate_inpaint()` exists in `app/core/pipelines.py`, no page) and **ControlNet** (`generate_controlnet()` exists, no page). **Flux** models are detected by name in `manager.py`, but `_load_txt2img` only tries the SDXL and SD 1.5 pipelines, so Flux generation fails.
+Inpainting and ControlNet pages are now wired. Flux models are loaded with FluxPipeline when the model ID contains 'flux'.
 
 There are no automated tests and no CI. PyInstaller specs exist in `packaging/{windows,macos,linux}/pyforge.spec` but no packaged build has been verified.
 
